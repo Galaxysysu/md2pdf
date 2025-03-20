@@ -1,0 +1,6 @@
+beautifulsoup4>=4.9.0
+cairosvg>=2.5.0
+requests>=2.25.0
+
+# 此外，您需要单独安装pandoc。请访问: https://pandoc.org/installing.html
+# mermaid-cli是可选的，如果需要本地转换Mermaid图表，可以使用npm安装：npm install -g @mermaid-js/mermaid-cli 
