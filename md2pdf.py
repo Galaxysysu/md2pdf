@@ -1000,6 +1000,8 @@ def markdown_to_pdf(markdown_text: str, output_path: str, temp_dir: str) -> None
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{amsfonts}
+\usepackage{listings}
+\usepackage{xcolor}
 
 % 定义数学字体和符号 
 \DeclareMathAlphabet{\mathbf}{OT1}{cmr}{bx}{n}
@@ -1024,6 +1026,52 @@ def markdown_to_pdf(markdown_text: str, output_path: str, temp_dir: str) -> None
 \DeclareMathOperator{\diff}{d}  % 微分算子
 \DeclareMathOperator{\Tr}{Tr}   % 迹算子
 \DeclareMathOperator{\Det}{Det} % 行列式算子
+
+% 代码高亮颜色设置
+\definecolor{codebackground}{RGB}{250,250,250}
+\definecolor{codekeyword}{RGB}{0,0,255}
+\definecolor{codecomment}{RGB}{0,128,0}
+\definecolor{codestring}{RGB}{163,21,21}
+\definecolor{codenumber}{RGB}{100,50,200}
+\definecolor{codebuiltin}{RGB}{0,112,163}
+
+% 定义Python语法高亮
+\lstdefinelanguage{pythoncode}{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  showstringspaces=false,
+  keywordstyle=\color{codekeyword},
+  stringstyle=\color{codestring},
+  commentstyle={\color{codecomment}\fontspec{""" + mono_font + r"""}},
+  numberstyle=\tiny\color{codenumber},
+  identifierstyle=\ttfamily,
+  backgroundcolor=\color{codebackground},
+  frame=single,
+  rulecolor=\color{black},
+  tabsize=4,
+  extendedchars=true,
+  inputencoding=utf8,
+  % Python关键字
+  keywords={and,as,assert,break,class,continue,def,del,elif,else,except,
+            finally,for,from,global,if,import,in,is,lambda,not,or,pass,
+            print,raise,return,try,while,with,yield,None,True,False},
+  % Python内置函数和类型
+  keywordstyle=[2]{\color{codebuiltin}},
+  keywords=[2]{abs,all,any,bin,bool,bytearray,bytes,callable,chr,classmethod,
+             compile,complex,delattr,dict,dir,divmod,enumerate,eval,exec,
+             filter,float,format,frozenset,getattr,globals,hasattr,hash,
+             help,hex,id,input,int,isinstance,issubclass,iter,len,list,
+             locals,map,max,memoryview,min,next,object,oct,open,ord,pow,
+             property,range,repr,reversed,round,set,setattr,slice,sorted,
+             staticmethod,str,sum,super,tuple,type,vars,zip},
+  literate={，}{{，}}1 {。}{{。}}1 {：}{{：}}1 {；}{{；}}1 {！}{{！}}1 {？}{{？}}1
+           {【}{{\textlbrackdbl}}1 {】}{{\textrbrackdbl}}1
+           {'}{{\textquotesingle}}1
+}
+
+% 使用pythoncode作为默认语言
+\lstset{language=pythoncode}
 """)
     
     # 使用更直接的转换命令，确保包顺序正确
@@ -1034,6 +1082,7 @@ def markdown_to_pdf(markdown_text: str, output_path: str, temp_dir: str) -> None
         "--pdf-engine=xelatex",
         "--include-in-header", header_file,
         "-V", f"CJKmainfont={serif_font}",
+        "-V", f"CJKmonofont={mono_font}",
         "-V", "geometry:margin=2.5cm",
         "-V", "colorlinks=true",
         "--toc",
@@ -1069,6 +1118,8 @@ def markdown_to_pdf(markdown_text: str, output_path: str, temp_dir: str) -> None
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{amsfonts}
+\usepackage{listings}
+\usepackage{xcolor}
 
 % 定义希腊字母命令
 \let\theta\relax
@@ -1083,6 +1134,26 @@ def markdown_to_pdf(markdown_text: str, output_path: str, temp_dir: str) -> None
 \DeclareRobustCommand{\bfseries}{\fontseries\bfdefault\selectfont}
 \renewcommand{\mathbf}[1]{\text{\bfseries{#1}}}
 \newcommand{\bm}[1]{\boldsymbol{#1}}
+
+% 定义代码高亮颜色
+\definecolor{codebackground}{RGB}{250,250,250}
+\definecolor{codekeyword}{RGB}{0,0,255}
+\definecolor{codecomment}{RGB}{0,128,0}
+\definecolor{codestring}{RGB}{163,21,21}
+
+% 简化的Python语法高亮
+\lstdefinelanguage{pythoncode}{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  keywordstyle=\color{codekeyword},
+  stringstyle=\color{codestring},
+  commentstyle=\color{codecomment},
+  backgroundcolor=\color{codebackground},
+  frame=single
+}
+
+\lstset{language=pythoncode}
 """)
             
             cmd_fallback = [
@@ -1092,6 +1163,8 @@ def markdown_to_pdf(markdown_text: str, output_path: str, temp_dir: str) -> None
                 "--pdf-engine=xelatex",
                 "--include-in-header", simple_header,
                 "-V", f"CJKmainfont={serif_font}",
+                "-V", f"CJKmonofont={mono_font}",
+                "--listings",
                 "--resource-path", temp_dir,
                 "--mathjax"
             ]
@@ -1110,6 +1183,8 @@ def markdown_to_pdf(markdown_text: str, output_path: str, temp_dir: str) -> None
                     "-o", output_path,
                     "--pdf-engine=xelatex",
                     "-V", f"CJKmainfont={serif_font}",
+                    "-V", f"CJKmonofont={mono_font}",
+                    "--listings",
                     "--resource-path", temp_dir,
                     "--mathjax"
                 ]
