@@ -27,6 +27,7 @@ from pathlib import Path
 import base64
 from typing import Dict, List, Tuple, Optional, Union
 
+# 必要的库，导入失败时终止程序
 try:
     import cairosvg
     import requests
@@ -50,7 +51,8 @@ except (subprocess.SubprocessError, FileNotFoundError):
     print("错误: 未安装xelatex。请安装TeX Live、MiKTeX或其他包含XeLaTeX的TeX发行版。")
     sys.exit(1)
 
-# 使用已安装的mermaid-py包进行转换
+# 使用已安装的mermaid-py包进行转换（可选依赖）
+MERMAID_AVAILABLE = False
 try:
     import mermaid as md
     from mermaid.graph import Graph
@@ -60,6 +62,9 @@ except ImportError:
     MERMAID_AVAILABLE = False
     print("警告: 未找到mermaid-py包，将使用替代方案转换mermaid图表。")
     print("要使用本地转换，请安装: pip install mermaid-py")
+
+# 定义graphviz作为全局变量，以便在需要时检查是否可用
+graphviz = None
 
 # 检测系统中可用的中文字体
 def detect_available_fonts():
@@ -326,7 +331,7 @@ def preprocess_latex_math(markdown_text: str) -> str:
     return processed_text
 
 def fix_svg_errors(svg_code):
-    """修复常见的SVG错误，特别是黑色条带问题"""
+    """修复常见的SVG错误，特别是黑色条带问题和LaTeX公式"""
     # 先保存原始代码，以防修复失败
     original_svg = svg_code
     
@@ -362,7 +367,285 @@ def fix_svg_errors(svg_code):
     fixed_line_count = len(re.findall(r'<line', svg_code))
     print(f"[坐标轴检查] 原始线条数: {orig_line_count}, 修复后: {fixed_line_count}")
     
-    # ===== 第2步：特殊处理图8和图9中的黑色水平条带 =====
+    # ===== 第2步：处理SVG中的LaTeX公式 =====
+    
+    # 检测非常复杂的LaTeX公式，需要特殊处理
+    complex_formula_detected = False
+    if '\\begin{align}' in svg_code or '\\begin{matrix}' in svg_code or '\\frac{' in svg_code:
+        complex_formula_detected = True
+        print("[复杂公式] 检测到高级LaTeX公式，将使用特殊处理方式")
+    
+    # 在<text>元素中查找和处理LaTeX公式
+    def replace_latex_in_text(match):
+        full_text = match.group(0)
+        text_attrs = match.group(1)
+        text_content = match.group(2)
+        
+        # 检查是否包含LaTeX公式 ($...$)
+        if '$' not in text_content:
+            return full_text
+            
+        # 记录原始内容，以便紧急情况下回退
+        original_content = text_content
+        
+        try:
+            # 首先尝试预处理一些复杂的LaTeX表达式
+            text_content = text_content.replace('\\mathbf{', '<tspan font-weight="bold">')
+            text_content = text_content.replace('\\textbf{', '<tspan font-weight="bold">')
+            text_content = text_content.replace('\\vec{', '<tspan font-style="italic" text-decoration="overline">')
+            text_content = text_content.replace('\\overrightarrow{', '<tspan font-style="italic" text-decoration="overline">')
+            text_content = text_content.replace('\\mathit{', '<tspan font-style="italic">')
+            
+            # 处理量子力学特殊符号
+            # 波函数符号
+            text_content = text_content.replace('\\psi', 'ψ')
+            # 波浪线表示傅里叶变换
+            text_content = re.sub(r'\\tilde{([^}]+)}', r'<tspan font-family="serif" font-style="italic">~\1</tspan>', text_content)
+            # 帽子表示算符
+            text_content = re.sub(r'\\hat{([^}]+)}', r'<tspan font-family="serif" font-style="italic">^\1</tspan>', text_content)
+            # 处理复合结构如波函数的共轭
+            text_content = re.sub(r'\\psi\^\*', r'ψ<tspan baseline-shift="super" dy="-0.5em" font-size="0.8em">*</tspan>', text_content)
+            text_content = re.sub(r'\\tilde{\\psi}\^\*', r'~ψ<tspan baseline-shift="super" dy="-0.5em" font-size="0.8em">*</tspan>', text_content)
+            
+            # 规约普朗克常数
+            text_content = text_content.replace('\\hbar', 'ℏ')
+            # 量子力学中的期望值符号（尖括号）
+            text_content = text_content.replace('\\langle', '⟨')
+            text_content = text_content.replace('\\rangle', '⟩')
+            # 添加指数表示
+            text_content = re.sub(r'e\^{([^}]+)}', r'e<tspan baseline-shift="super" dy="-0.5em" font-size="0.8em">\1</tspan>', text_content)
+            # 虚数单位
+            text_content = text_content.replace('\\i', 'i')
+            text_content = text_content.replace('-i\\hbar', '-iℏ')
+            text_content = text_content.replace('i\\hbar', 'iℏ')
+            
+            text_content = re.sub(r'\\text{([^}]+)}', r'\1', text_content)
+            text_content = text_content.replace('\\left', '')
+            text_content = text_content.replace('\\right', '')
+            text_content = text_content.replace('\\quad', ' ')
+            text_content = text_content.replace('\\;', ' ')
+            
+            # 处理矩阵相关操作
+            text_content = text_content.replace('\\nabla', '∇')
+            text_content = text_content.replace('\\partial', '∂')
+            
+            # 处理矩阵表示法
+            # 将矩阵表示替换为简化版本，例如 [a b; c d] 或 |a b|
+            # 处理行列式
+            text_content = re.sub(r'\\begin{vmatrix}(.*?)\\end{vmatrix}', r'|𝑑𝑒𝑡|', text_content, flags=re.DOTALL)
+            text_content = re.sub(r'\\begin{determinant}(.*?)\\end{determinant}', r'|𝑑𝑒𝑡|', text_content, flags=re.DOTALL)
+            
+            # 处理一般矩阵
+            def simplify_matrix(match):
+                matrix_content = match.group(1)
+                # 简化为 [矩阵]
+                return '[矩阵]'
+            
+            text_content = re.sub(r'\\begin{(?:p?matrix|bmatrix|Bmatrix|vmatrix|Vmatrix)}(.*?)\\end{(?:p?matrix|bmatrix|Bmatrix|vmatrix|Vmatrix)}', 
+                                 simplify_matrix, text_content, flags=re.DOTALL)
+            
+            # 处理行向量
+            text_content = re.sub(r'\\begin{pmatrix}([^\\]+)\\end{pmatrix}', r'(\1)', text_content)
+            
+            # 在尝试替换花括号
+            text_content = text_content.replace('\\{', '{')
+            text_content = text_content.replace('\\}', '}')
+            
+            # 闭合所有可能打开的标签
+            open_tspans = text_content.count('<tspan')
+            close_tspans = text_content.count('</tspan>')
+            for _ in range(open_tspans - close_tspans):
+                text_content += '</tspan>'
+            
+            # 使用正则表达式替换所有LaTeX公式
+            def replace_latex_formula(match):
+                formula = match.group(1)
+                # 仅包装未包装的内容
+                if formula.startswith('<tspan'):
+                    return f"${formula}$"
+                return f'<tspan font-family="serif" font-style="italic">{formula}</tspan>'
+            
+            text_content = re.sub(r'\$([^$]+?)\$', replace_latex_formula, text_content)
+            
+            # 特殊处理一些常见的数学符号 - 增加更多符号
+            text_content = text_content.replace('\u2032', "'")  # 替换撇号
+            text_content = text_content.replace('\\alpha', 'α')
+            text_content = text_content.replace('\\beta', 'β')
+            text_content = text_content.replace('\\gamma', 'γ')
+            text_content = text_content.replace('\\Gamma', 'Γ')
+            text_content = text_content.replace('\\Delta', 'Δ')
+            text_content = text_content.replace('\\delta', 'δ')
+            text_content = text_content.replace('\\epsilon', 'ε')
+            text_content = text_content.replace('\\varepsilon', 'ε')
+            text_content = text_content.replace('\\zeta', 'ζ')
+            text_content = text_content.replace('\\eta', 'η')
+            text_content = text_content.replace('\\theta', 'θ')
+            text_content = text_content.replace('\\Theta', 'Θ')
+            text_content = text_content.replace('\\vartheta', 'ϑ')
+            text_content = text_content.replace('\\iota', 'ι')
+            text_content = text_content.replace('\\kappa', 'κ')
+            text_content = text_content.replace('\\lambda', 'λ')
+            text_content = text_content.replace('\\Lambda', 'Λ')
+            text_content = text_content.replace('\\mu', 'μ')
+            text_content = text_content.replace('\\nu', 'ν')
+            text_content = text_content.replace('\\xi', 'ξ')
+            text_content = text_content.replace('\\Xi', 'Ξ')
+            text_content = text_content.replace('\\pi', 'π')
+            text_content = text_content.replace('\\Pi', 'Π')
+            text_content = text_content.replace('\\rho', 'ρ')
+            text_content = text_content.replace('\\varrho', 'ϱ')
+            text_content = text_content.replace('\\sigma', 'σ')
+            text_content = text_content.replace('\\Sigma', 'Σ')
+            text_content = text_content.replace('\\tau', 'τ')
+            text_content = text_content.replace('\\upsilon', 'υ')
+            text_content = text_content.replace('\\Upsilon', 'Υ')
+            text_content = text_content.replace('\\phi', 'φ')
+            text_content = text_content.replace('\\Phi', 'Φ')
+            text_content = text_content.replace('\\varphi', 'φ')
+            text_content = text_content.replace('\\chi', 'χ')
+            text_content = text_content.replace('\\psi', 'ψ')
+            text_content = text_content.replace('\\Psi', 'Ψ')
+            text_content = text_content.replace('\\omega', 'ω')
+            text_content = text_content.replace('\\Omega', 'Ω')
+            
+            # 数学符号
+            text_content = text_content.replace('\\infty', '∞')
+            text_content = text_content.replace('\\pm', '±')
+            text_content = text_content.replace('\\mp', '∓')
+            text_content = text_content.replace('\\approx', '≈')
+            text_content = text_content.replace('\\sim', '∼')
+            text_content = text_content.replace('\\cong', '≅')
+            text_content = text_content.replace('\\neq', '≠')
+            text_content = text_content.replace('\\ne', '≠')
+            text_content = text_content.replace('\\leq', '≤')
+            text_content = text_content.replace('\\le', '≤')
+            text_content = text_content.replace('\\geq', '≥')
+            text_content = text_content.replace('\\ge', '≥')
+            text_content = text_content.replace('\\ll', '≪')
+            text_content = text_content.replace('\\gg', '≫')
+            text_content = text_content.replace('\\subset', '⊂')
+            text_content = text_content.replace('\\supset', '⊃')
+            text_content = text_content.replace('\\subseteq', '⊆')
+            text_content = text_content.replace('\\supseteq', '⊇')
+            text_content = text_content.replace('\\cup', '∪')
+            text_content = text_content.replace('\\cap', '∩')
+            text_content = text_content.replace('\\emptyset', '∅')
+            text_content = text_content.replace('\\in', '∈')
+            text_content = text_content.replace('\\notin', '∉')
+            text_content = text_content.replace('\\cdot', '·')
+            text_content = text_content.replace('\\times', '×')
+            text_content = text_content.replace('\\div', '÷')
+            text_content = text_content.replace('\\circ', '○')
+            text_content = text_content.replace('\\bullet', '•')
+            text_content = text_content.replace('\\oplus', '⊕')
+            text_content = text_content.replace('\\otimes', '⊗')
+            text_content = text_content.replace('\\perp', '⊥')
+            text_content = text_content.replace('\\parallel', '∥')
+            text_content = text_content.replace('\\forall', '∀')
+            text_content = text_content.replace('\\exists', '∃')
+            text_content = text_content.replace('\\nexists', '∄')
+            text_content = text_content.replace('\\therefore', '∴')
+            text_content = text_content.replace('\\because', '∵')
+            text_content = text_content.replace('\\leftarrow', '←')
+            text_content = text_content.replace('\\rightarrow', '→')
+            text_content = text_content.replace('\\to', '→')
+            text_content = text_content.replace('\\Rightarrow', '⇒')
+            text_content = text_content.replace('\\Leftarrow', '⇐')
+            text_content = text_content.replace('\\iff', '⇔')
+            text_content = text_content.replace('\\mapsto', '↦')
+            text_content = text_content.replace('\\uparrow', '↑')
+            text_content = text_content.replace('\\downarrow', '↓')
+            text_content = text_content.replace('\\updownarrow', '↕')
+            text_content = text_content.replace('\\Uparrow', '⇑')
+            text_content = text_content.replace('\\Downarrow', '⇓')
+            text_content = text_content.replace('\\Updownarrow', '⇕')
+            text_content = text_content.replace('\\ldots', '…')
+            text_content = text_content.replace('\\cdots', '⋯')
+            text_content = text_content.replace('\\vdots', '⋮')
+            text_content = text_content.replace('\\ddots', '⋱')
+            text_content = text_content.replace('\\square', '□')
+            text_content = text_content.replace('\\checkmark', '✓')
+            text_content = text_content.replace('\\nabla', '∇')
+            text_content = text_content.replace('\\prime', '′')
+            text_content = text_content.replace('\\int', '∫')
+            text_content = text_content.replace('\\iint', '∬')
+            text_content = text_content.replace('\\iiint', '∭')
+            text_content = text_content.replace('\\oint', '∮')
+            text_content = text_content.replace('\\sum', '∑')
+            text_content = text_content.replace('\\prod', '∏')
+            text_content = text_content.replace('\\coprod', '∐')
+            text_content = text_content.replace('\\partial', '∂')
+            text_content = text_content.replace('\\Re', 'ℜ')
+            text_content = text_content.replace('\\Im', 'ℑ')
+            text_content = text_content.replace('\\aleph', 'ℵ')
+            
+            # 特殊处理分数
+            text_content = re.sub(r'\\frac{([^}]+)}{([^}]+)}', r'<tspan font-family="serif" font-style="italic">(\1)/(\2)</tspan>', text_content)
+            
+            # 处理积分上下限
+            text_content = re.sub(r'\\int_{([^}]+)}\\^{([^}]+)}', r'<tspan font-family="serif" font-style="italic">∫<tspan baseline-shift="sub" dy="0.3em" font-size="0.8em">\1</tspan><tspan baseline-shift="super" dy="-0.5em" font-size="0.8em">\2</tspan></tspan>', text_content)
+            text_content = re.sub(r'\\int_{([^}]+)}', r'<tspan font-family="serif" font-style="italic">∫<tspan baseline-shift="sub" dy="0.3em" font-size="0.8em">\1</tspan></tspan>', text_content)
+            
+            # 特殊处理带上标的积分
+            text_content = re.sub(r'\\int\^{([^}]+)}', r'<tspan font-family="serif" font-style="italic">∫<tspan baseline-shift="super" dy="-0.5em" font-size="0.8em">\1</tspan></tspan>', text_content)
+            
+            # 改进上标下标处理 - 使用SVG的dy属性进行精确控制
+            # 花括号形式的上标
+            text_content = re.sub(r'\^{([^}]+)}', r'<tspan baseline-shift="super" dy="-0.5em" font-size="0.8em">\1</tspan>', text_content)
+            # 花括号形式的下标
+            text_content = re.sub(r'_{([^}]+)}', r'<tspan baseline-shift="sub" dy="0.3em" font-size="0.8em">\1</tspan>', text_content)
+            # 简单上标（单个字符）
+            text_content = re.sub(r'\^([a-zA-Z0-9])', r'<tspan baseline-shift="super" dy="-0.5em" font-size="0.8em">\1</tspan>', text_content)
+            # 简单下标（单个字符）
+            text_content = re.sub(r'_([a-zA-Z0-9])', r'<tspan baseline-shift="sub" dy="0.3em" font-size="0.8em">\1</tspan>', text_content)
+            
+            # 处理平方和立方的特殊情况
+            text_content = text_content.replace('²', '<tspan baseline-shift="super" dy="-0.5em" font-size="0.8em">2</tspan>')
+            text_content = text_content.replace('³', '<tspan baseline-shift="super" dy="-0.5em" font-size="0.8em">3</tspan>')
+            
+            # 确保最终结果有效
+            if text_content.count('<tspan') != text_content.count('</tspan>'):
+                print(f"警告: 检测到标签不匹配，恢复原始内容")
+                text_content = original_content
+        except Exception as e:
+            print(f"处理LaTeX公式时出错: {e}")
+            text_content = original_content
+        
+        # 组装回完整的text元素
+        return f'<text{text_attrs}>{text_content}</text>'
+    
+    # 应用LaTeX处理到SVG文本 - 使用非贪婪匹配并确保正确处理嵌套标签
+    svg_code = re.sub(r'<text([^>]*)>(.*?)</text>', replace_latex_in_text, svg_code)
+    
+    # 如果检测到复杂公式，可以考虑生成替代的SVG嵌入
+    if complex_formula_detected:
+        # 创建增强渲染效果的样式定义
+        math_style = """
+<style type="text/css">
+    .math { font-family: 'STIX Two Math', 'Latin Modern Math', serif; }
+    .math-italic { font-style: italic; }
+    .math-bold { font-weight: bold; }
+</style>
+"""
+        
+        # 检查SVG结构
+        svg_open_match = re.search(r'<svg([^>]*)>', svg_code)
+        if svg_open_match:
+            # 如果已有defs部分，在其中添加样式
+            defs_match = re.search(r'(<defs>.*?</defs>)', svg_code, re.DOTALL)
+            if defs_match:
+                defs_content = defs_match.group(1)
+                # 在defs结束标签前添加样式
+                new_defs = defs_content.replace('</defs>', f'{math_style}</defs>')
+                svg_code = svg_code.replace(defs_content, new_defs)
+            else:
+                # 没有defs部分，添加一个完整的defs块
+                defs_block = f'<defs>{math_style}</defs>'
+                # 在svg开始标签后添加defs块
+                svg_attrs = svg_open_match.group(1)
+                svg_code = svg_code.replace(f'<svg{svg_attrs}>', f'<svg{svg_attrs}>\n{defs_block}')
+    
+    # ===== 第3步：特殊处理图8和图9中的黑色水平条带 =====
     
     # 对特定类型的图直接删除黑色条带
     if is_figure8 or is_figure9:
@@ -402,7 +685,7 @@ def fix_svg_errors(svg_code):
         fixed_black_rect_count = len(re.findall(r'<rect[^>]*?fill="(?:black|#000000|#000)"[^>]*?>', svg_code))
         print(f"[黑色矩形清理] 原有 {black_rect_count} 个，剩余 {fixed_black_rect_count} 个")
     
-    # ===== 第3步：修复空坐标轴问题 =====
+    # ===== 第4步：修复空坐标轴问题 =====
     
     # 检测是否存在坐标轴线
     has_axes = re.search(r'<line[^>]*?x1="[^"]+"\s+y1="[^"]+"\s+x2="[^"]+"[^>]*?>', svg_code)
@@ -427,7 +710,7 @@ def fix_svg_errors(svg_code):
     
     # ===== 图8和图9的极端情况处理 =====
     # 如果是图8或图9，并且仍然有黑色条带问题，使用备用SVG代码
-    if (is_figure8 or is_figure9) and fixed_black_rect_count > 0:
+    if (is_figure8 or is_figure9) and 'fixed_black_rect_count' in locals() and fixed_black_rect_count > 0:
         if is_figure8:
             print("[紧急处理] 图8仍有黑色矩形，使用预定义SVG")
             # 为图8提供干净无黑条的备用SVG
@@ -707,10 +990,48 @@ def process_mermaid_artifact(artifact: Dict, temp_dir: str) -> str:
     # 生成图像
     conversion_success = False
     
-    # 方法1: 尝试使用Python的graphviz库来转换简单的流程图
-    if mermaid_content.startswith('flowchart') or mermaid_content.startswith('graph'):
+    # 方法1: 使用mermaid-py包（如果可用）
+    if MERMAID_AVAILABLE and not conversion_success:
         try:
-            import graphviz
+            print(f"使用mermaid-py转换: {artifact['id']}")
+            # 尝试使用mermaid-py转换，但由于API变更，可能会失败
+            # 旧版API(已不可用): Graph.from_str(mermaid_content)
+            try:
+                graph = Graph.from_str(mermaid_content)
+                graph.render_png(png_path)
+            except AttributeError:
+                # 如果旧版API不可用，尝试使用新版API
+                # 检测图表类型
+                graph_type = "flowchart"  # 默认类型
+                if mermaid_content.startswith("sequenceDiagram"):
+                    graph_type = "sequenceDiagram"
+                elif mermaid_content.startswith("classDiagram"):
+                    graph_type = "classDiagram"
+                elif mermaid_content.startswith("stateDiagram"):
+                    graph_type = "stateDiagram"
+                elif mermaid_content.startswith("erDiagram"):
+                    graph_type = "erDiagram"
+                
+                # 使用新版API，但这可能只在Jupyter环境中有效
+                print(f"尝试使用新版mermaid-py API转换: {artifact['id']}")
+                graph = Graph(graph_type, mermaid_content)
+                # 不尝试直接渲染为图像，因为新版API可能不支持
+                # 让代码继续到备用方法
+                raise Exception("mermaid-py无法直接生成图像，将使用备用方法")
+                
+            conversion_success = os.path.exists(png_path)
+            if conversion_success:
+                print(f"使用mermaid-py转换成功: {artifact['id']}")
+        except Exception as e:
+            print(f"使用mermaid-py转换失败: {e}")
+    
+    # 方法2: 尝试使用Python的graphviz库来转换简单的流程图
+    if not conversion_success and mermaid_content.startswith('flowchart') or mermaid_content.startswith('graph'):
+        try:
+            # 延迟导入graphviz
+            global graphviz
+            if graphviz is None:
+                import graphviz
             
             # 创建一个有向图
             dot = graphviz.Digraph(comment=artifact['title'], format='png')
@@ -994,21 +1315,33 @@ def process_mermaid_artifact(artifact: Dict, temp_dir: str) -> str:
         except Exception as e:
             print(f"警告: Graphviz转换失败 ({e})")
     
-    # 方法2: 使用mermaid-cli (如果可用)
+    # 方法3: 使用mermaid-cli (如果可用)
     if not conversion_success:
         try:
+            print(f"尝试使用mermaid-cli转换图表: {artifact['id']}")
+            
+            # 保存一个简单版本的mermaid文件，避免中文问题
+            simple_mermaid_path = os.path.join(temp_dir, f"{artifact['id']}_simple.mmd")
+            with open(simple_mermaid_path, 'w', encoding='utf-8') as f:
+                # 替换中文参与者为英文字母，保留其他结构
+                simplified_content = mermaid_content
+                if "参与者" in simplified_content:
+                    simplified_content = simplified_content.replace("参与者A", "Actor A")
+                    simplified_content = simplified_content.replace("参与者B", "Actor B")
+                    simplified_content = simplified_content.replace("用户", "User")
+                    simplified_content = simplified_content.replace("系统", "System")
+                f.write(simplified_content)
+            
+            # 使用简化的命令
             cmd = [
                 "npx", 
                 "@mermaid-js/mermaid-cli", 
-                "--input", mermaid_path,
+                "--input", simple_mermaid_path,
                 "--output", png_path,
-                "--backgroundColor", "white",
-                "--width", "800",
-                "--height", "600",
-                "--cssFile", "/dev/null"  # 防止加载默认CSS
+                "--backgroundColor", "white"
             ]
             
-            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
             
             # 检查图片是否生成成功
             if os.path.exists(png_path) and os.path.getsize(png_path) > 100:
@@ -1019,7 +1352,7 @@ def process_mermaid_artifact(artifact: Dict, temp_dir: str) -> str:
         except (subprocess.SubprocessError, FileNotFoundError) as e:
             print(f"警告: mermaid-cli转换失败 ({e})")
     
-    # 方法3: 创建特殊的SVG格式的Mermaid代码图像，使用正确的中文字体
+    # 方法4: 创建特殊的SVG格式的Mermaid代码图像，使用正确的中文字体
     if not conversion_success:
         try:
             # 创建特殊的SVG来显示mermaid图表
@@ -1421,12 +1754,67 @@ def process_markdown_to_pdf(input_path: str, output_path: Optional[str] = None) 
             print(f"处理失败: {e}")
             raise
 
+def test_latex_in_svg():
+    """测试SVG中LaTeX公式修复功能"""
+    # 创建一个包含LaTeX公式的SVG测试样例
+    test_svg = r'''<svg width="600" height="300" xmlns="http://www.w3.org/2000/svg">
+    <rect x="0" y="0" width="600" height="300" fill="#f8f9fa"/>
+    <text x="60" y="60" font-size="16">正常文本</text>
+    <text x="60" y="90" font-size="16">包含公式: $A' = U^{-1}$</text>
+    <text x="60" y="120" font-size="16">向量: $\vec{r} = \vec{r_1} + \vec{r_2}$</text>
+    <text x="60" y="150" font-size="16">矩阵: $\begin{pmatrix} a & b \\ c & d \end{pmatrix}$</text>
+    <text x="60" y="180" font-size="16">希腊字母: $\alpha, \beta, \gamma, \Gamma, \delta, \Delta$</text>
+    <text x="60" y="210" font-size="16">分数: $\frac{1}{2} + \frac{1}{3}$</text>
+    <text x="60" y="240" font-size="16">积分: $\int_{a}^{b} f(x) dx = F(b) - F(a)$</text>
+    <text x="60" y="270" font-size="16">偏导数: $\frac{\partial f}{\partial x}$</text>
+</svg>'''
+
+    # 修复SVG
+    fixed_svg = fix_svg_errors(test_svg)
+    
+    # 保存原始和修复后的SVG到临时文件，用于比较
+    with tempfile.NamedTemporaryFile('w', suffix='.svg', delete=False) as f_orig:
+        f_orig.write(test_svg)
+        orig_path = f_orig.name
+    
+    with tempfile.NamedTemporaryFile('w', suffix='.svg', delete=False) as f_fixed:
+        f_fixed.write(fixed_svg)
+        fixed_path = f_fixed.name
+    
+    print(f"测试完成!")
+    print(f"原始SVG保存到: {orig_path}")
+    print(f"修复后SVG保存到: {fixed_path}")
+    print(f"请使用浏览器打开两个文件进行比较，检查LaTeX公式渲染是否改进")
+
+    # 尝试转换为PNG方便查看
+    try:
+        png_path = fixed_path.replace('.svg', '.png')
+        cairosvg.svg2png(url=fixed_path, write_to=png_path)
+        print(f"转换后的PNG保存到: {png_path}")
+    except Exception as e:
+        print(f"无法转换为PNG: {e}")
+    
+    return orig_path, fixed_path
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description='将Markdown文件转换为PDF')
-    parser.add_argument('input_file', help='输入的Markdown文件路径')
+    parser.add_argument('input_file', nargs='?', help='输入的Markdown文件路径')
     parser.add_argument('-o', '--output', help='输出的PDF文件路径 (默认使用输入文件名但扩展名改为.pdf)')
+    parser.add_argument('--test-svg', action='store_true', help='测试SVG中LaTeX公式的修复功能')
     args = parser.parse_args()
+    
+    # 如果启用了测试模式，运行测试
+    if args.test_svg:
+        print("运行SVG LaTeX公式修复测试...")
+        test_latex_in_svg()
+        return
+    
+    # 在非测试模式下，必须提供输入文件
+    if not args.input_file:
+        parser.print_help()
+        print("\n错误: 必须提供输入的Markdown文件路径")
+        sys.exit(1)
     
     # 验证输入文件
     if not os.path.isfile(args.input_file):
@@ -1441,4 +1829,4 @@ def main():
         sys.exit(1)
 
 if __name__ == '__main__':
-    main() 
+    main()
